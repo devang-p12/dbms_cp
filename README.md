@@ -7,15 +7,163 @@
 
 ## 📑 Table of Contents
 
-1. [Features](#-features)
-2. [Tech Stack](#-tech-stack)
-3. [Project Structure](#-project-structure)
-4. [Database Schema](#-database-schema)
-5. [API Reference](#-api-reference)
-6. [Setup & Running Locally](#-setup--running-locally)
-7. [Demo / Offline Mode](#-demo--offline-mode)
-8. [Default Credentials](#-default-credentials)
-9. [User Roles & Access Control](#-user-roles--access-control)
+1. [Architecture Diagram](#-architecture-diagram)
+2. [Features](#-features)
+3. [Tech Stack](#-tech-stack)
+4. [Project Structure](#-project-structure)
+5. [Database Schema](#-database-schema)
+6. [API Reference](#-api-reference)
+7. [Setup & Running Locally](#-setup--running-locally)
+8. [Demo / Offline Mode](#-demo--offline-mode)
+9. [Default Credentials](#-default-credentials)
+10. [User Roles & Access Control](#-user-roles--access-control)
+
+---
+
+## 🏗 Architecture Diagram
+
+### System Architecture
+
+```mermaid
+flowchart TD
+    subgraph CLIENT["🌐 Browser / Client"]
+        direction TB
+        UI["React + Vite SPA\n(http://localhost:5173)"]
+        AXIOS["Axios HTTP Client\nwith JWT interceptor"]
+        OFFLINE["⚡ Offline Interceptor\n(api.js)"]
+        SS["📦 sessionStore.js\nMock DB in sessionStorage"]
+
+        UI --> AXIOS
+        AXIOS -- "Network OK" --> ONLINE_PATH
+        AXIOS -- "Network Error / 502-504" --> OFFLINE
+        OFFLINE --> SS
+        SS -- "Mock Response" --> UI
+    end
+
+    subgraph ONLINE_PATH["✅ Online Path"]
+        direction TB
+        API["Node.js + Express API\n(http://localhost:5000/api)"]
+        AUTH_MW["🔐 JWT Middleware\nauth.js"]
+        ROUTES["Route Handlers"]
+
+        API --> AUTH_MW
+        AUTH_MW --> ROUTES
+    end
+
+    subgraph ROUTES["📡 API Routes"]
+        direction LR
+        R1["/login"]
+        R2["/dashboard"]
+        R3["/customers"]
+        R4["/accounts"]
+        R5["/transactions"]
+        R6["/employees"]
+        R7["/attendance"]
+        R8["/payroll"]
+        R9["/audit"]
+    end
+
+    subgraph DB["🗄 MySQL 8.x — Database: cp"]
+        direction TB
+        T1["users"]
+        T2["customer"]
+        T3["account\nsaving_acc / current_acc"]
+        T4["transaction_tbl\nupi / atm / card sub-tables"]
+        T5["employee"]
+        T6["attendance"]
+        T7["payroll"]
+        T8["bank_branch"]
+        T9["audit_log"]
+    end
+
+    ROUTES --> DB
+    DB -- "mysql2 pool" --> ROUTES
+    ONLINE_PATH -- "JSON Response" --> UI
+```
+
+---
+
+### Request Lifecycle
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant React as React SPA
+    participant Axios as Axios + Interceptor
+    participant API as Express API
+    participant JWT as JWT Middleware
+    participant DB as MySQL
+    participant SS as sessionStore
+
+    User->>React: Performs action (e.g. Transfer)
+    React->>Axios: api.post('/transactions/transfer', data)
+    Axios->>Axios: Attach Bearer token from localStorage
+
+    alt Backend reachable
+        Axios->>API: POST /api/transactions/transfer
+        API->>JWT: Verify token
+        JWT-->>API: Decoded user payload
+        API->>DB: UPDATE account SET balance...
+        DB-->>API: OK
+        API->>DB: INSERT INTO transaction_tbl...
+        DB-->>API: OK
+        API->>DB: INSERT INTO audit_log...
+        API-->>Axios: 200 { message: "Transfer successful" }
+        Axios-->>React: Response data
+    else Backend unreachable (network error)
+        Axios->>Axios: enableOffline(), fire finvault:offline event
+        Axios->>SS: mockTransfer({ from_acc, to_acc, amount })
+        SS->>SS: Update sessionStorage balances
+        SS->>SS: Append to sessionStorage transactions
+        SS-->>Axios: { message: "Transfer successful" }
+        Axios-->>React: Response data
+    end
+
+    React-->>User: Show success receipt
+```
+
+---
+
+### Role-Based Access Architecture
+
+```mermaid
+flowchart LR
+    subgraph ROLES["User Roles"]
+        C["👤 CUSTOMER"]
+        E["🧑‍💼 EMPLOYEE"]
+        A["⚙ ADMIN"]
+    end
+
+    subgraph FRONTEND["Frontend Guard (RoleRoute)"]
+        FG["RoleRoute checks\nlocalStorage user.role"]
+    end
+
+    subgraph BACKEND["Backend Guard (JWT Middleware)"]
+        BG["Verifies JWT\nChecks role claim"]
+    end
+
+    subgraph MODULES["Protected Modules"]
+        M1["💰 Banking\n(All roles)"]
+        M2["👥 Customer Mgmt\n(EMPLOYEE + ADMIN)"]
+        M3["🏦 Account Mgmt\n(EMPLOYEE + ADMIN)"]
+        M4["🧑‍💼 HCM: Employees\n(ADMIN only)"]
+        M5["📅 Attendance\n(ADMIN only — mark)\n(EMPLOYEE — view own)"]
+        M6["💼 Payroll\n(ADMIN only — generate)\n(EMPLOYEE — view own)"]
+        M7["📋 Audit Log\n(ADMIN only)"]
+    end
+
+    C --> FG
+    E --> FG
+    A --> FG
+    FG --> BG
+    BG --> M1
+    BG --> M2
+    BG --> M3
+    BG --> M4
+    BG --> M5
+    BG --> M6
+    BG --> M7
+```
 
 ---
 
